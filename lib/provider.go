@@ -100,7 +100,7 @@ func (p *Provider) Retrieve() (credentials.Value, error) {
 		p.sessions.Store(source, p.roleSessionName(), session, p.SessionDuration)
 	}
 
-	log.Debugf(" Using session %s, expires in %s",
+	log.Debugf("Using session %s, expires in %s",
 		(*session.AccessKeyId)[len(*session.AccessKeyId)-4:],
 		session.Expiration.Sub(time.Now()).String())
 
