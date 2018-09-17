@@ -22,6 +22,9 @@ const (
 
 	DefaultSessionDuration    = time.Hour * 4
 	DefaultAssumeRoleDuration = time.Minute * 15
+
+	OktaAwsSAMLUrlKey = "aws_saml_url"
+	OktaOIDCAppIdKey  = "oidc_app_id"
 )
 
 type ProviderOptions struct {
@@ -133,28 +136,36 @@ func (p *Provider) Retrieve() (credentials.Value, error) {
 	return value, nil
 }
 
-func (p *Provider) getSamlURL(source string) (string, error) {
+func (p *Provider) findFromProfile(key, source string) (string, error) {
 	haystack := []string{p.profile, source, "okta"}
 	for _, profile := range haystack {
-		oktaAwsSAMLUrl, ok := p.profiles[profile]["aws_saml_url"]
+		result, ok := p.profiles[profile][key]
 		if ok {
-			log.Debugf("Using aws_saml_url from profile: %s", profile)
-			return oktaAwsSAMLUrl, nil
+			log.Debugf("Using %s from profile: %s", key, profile)
+			return result, nil
 		}
 	}
-	return "", errors.New("aws_saml_url missing from ~/.aws/config")
+	return "", fmt.Errorf("%s missing from ~/.aws/config", key)
 }
 
 func (p *Provider) getSamlSessionCreds() (sts.Credentials, error) {
 	source := sourceProfile(p.profile, p.profiles)
-	oktaAwsSAMLUrl, err := p.getSamlURL(source)
-	if err != nil {
-		return sts.Credentials{}, err
-	}
-
 	profileARN, ok := p.profiles[source]["role_arn"]
 	if !ok {
 		return sts.Credentials{}, errors.New("Source profile must provide `role_arn`")
+	}
+
+	oktaAwsSAMLUrl, err := p.findFromProfile(OktaAwsSAMLUrlKey, source)
+	if err != nil {
+		log.Debug(err.Error())
+	}
+	oidcAppID, err := p.findFromProfile(OktaOIDCAppIdKey, source)
+	if err != nil {
+		log.Debug(err.Error())
+	}
+	if oktaAwsSAMLUrl == "" && oidcAppID == "" {
+		return sts.Credentials{}, fmt.Errorf("Either %s or %s has to be specified",
+			OktaAwsSAMLUrlKey, OktaOIDCAppIdKey)
 	}
 
 	provider := OktaProvider{
@@ -162,6 +173,7 @@ func (p *Provider) getSamlSessionCreds() (sts.Credentials, error) {
 		ProfileARN:      profileARN,
 		SessionDuration: p.SessionDuration,
 		OktaAwsSAMLUrl:  oktaAwsSAMLUrl,
+		OIDCAppID:       oidcAppID,
 	}
 
 	creds, oktaUsername, err := provider.Retrieve()

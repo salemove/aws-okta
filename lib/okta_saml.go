@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	OktaServer        = "okta.com"
 	SessionCookieName = "okta-session-cookie"
 )
 
