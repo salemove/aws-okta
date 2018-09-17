@@ -474,9 +474,9 @@ func (p *OktaProvider) Retrieve() (sts.Credentials, string, error) {
 	}
 
 	newCookieItem := keyring.Item{
-		Key:   "okta-session-cookie",
-		Data:  []byte(newSessionCookie),
-		Label: "okta session cookie",
+		Key:                         "okta-session-cookie",
+		Data:                        []byte(newSessionCookie),
+		Label:                       "okta session cookie",
 		KeychainNotTrustApplication: false,
 	}
 
