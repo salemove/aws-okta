@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/99designs/keyring"
+	"github.com/pkg/browser"
 	analytics "github.com/segmentio/analytics-go"
 	"github.com/segmentio/aws-okta/lib"
-	"github.com/skratchdot/open-golang/open"
 	"github.com/spf13/cobra"
 )
 
@@ -166,7 +166,7 @@ func loginRun(cmd *cobra.Command, args []string) error {
 
 	if Stdout {
 		fmt.Println(loginURL)
-	} else if err = open.Run(loginURL); err != nil {
+	} else if err = browser.OpenURL(loginURL); err != nil {
 		return err
 	}
 
