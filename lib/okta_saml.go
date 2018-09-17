@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/net/publicsuffix"
 
+	"github.com/99designs/keyring"
 	log "github.com/Sirupsen/logrus"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -23,7 +24,8 @@ import (
 )
 
 const (
-	OktaServer = "okta.com"
+	OktaServer        = "okta.com"
+	SessionCookieName = "okta-session-cookie"
 )
 
 type OktaSAMLClient struct {
@@ -38,6 +40,7 @@ type OktaSAMLClient struct {
 	Expiration      time.Time
 	OktaAwsSAMLUrl  string
 	CookieJar       http.CookieJar
+	Keyring         keyring.Keyring
 	BaseURL         *url.URL
 }
 
@@ -46,7 +49,7 @@ type SAMLAssertion struct {
 	RawData []byte
 }
 
-func NewOktaSAMLClient(creds OktaCreds, oktaAwsSAMLUrl string, sessionCookie string) (*OktaSAMLClient, error) {
+func NewOktaSAMLClient(creds OktaCreds, oktaAwsSAMLUrl string, keyring keyring.Keyring) (*OktaSAMLClient, error) {
 	base, err := url.Parse(fmt.Sprintf(
 		"https://%s.%s", creds.Organization, OktaServer,
 	))
@@ -59,13 +62,17 @@ func NewOktaSAMLClient(creds OktaCreds, oktaAwsSAMLUrl string, sessionCookie str
 		return nil, err
 	}
 
-	if sessionCookie != "" {
-		jar.SetCookies(base, []*http.Cookie{
-			{
-				Name:  "sid",
-				Value: sessionCookie,
-			},
-		})
+	if keyring != nil {
+		// Check for stored session cookie
+		cookieItem, err := keyring.Get(SessionCookieName)
+		if err == nil {
+			jar.SetCookies(base, []*http.Cookie{
+				{
+					Name:  "sid",
+					Value: string(cookieItem.Data),
+				},
+			})
+		}
 	}
 
 	return &OktaSAMLClient{
@@ -74,6 +81,7 @@ func NewOktaSAMLClient(creds OktaCreds, oktaAwsSAMLUrl string, sessionCookie str
 		Password:       creds.Password,
 		OktaAwsSAMLUrl: oktaAwsSAMLUrl,
 		CookieJar:      jar,
+		Keyring:        keyring,
 		BaseURL:        base,
 	}, nil
 }
@@ -117,7 +125,7 @@ func (o *OktaSAMLClient) AuthenticateUser() error {
 	return nil
 }
 
-func (o *OktaSAMLClient) AuthenticateProfile(profileARN string, duration time.Duration) (sts.Credentials, string, error) {
+func (o *OktaSAMLClient) AuthenticateProfile(profileARN string, duration time.Duration) (sts.Credentials, error) {
 
 	// Attempt to reuse session cookie
 	var assertion SAMLAssertion
@@ -126,20 +134,20 @@ func (o *OktaSAMLClient) AuthenticateProfile(profileARN string, duration time.Du
 		log.Debug("Failed to reuse session token, starting flow from start")
 
 		if err := o.AuthenticateUser(); err != nil {
-			return sts.Credentials{}, "", err
+			return sts.Credentials{}, err
 		}
 
 		// Step 3 : Get SAML Assertion and retrieve IAM Roles
 		log.Debug("Step: 3")
 		if err = o.Get("GET", o.OktaAwsSAMLUrl+"?onetimetoken="+o.UserAuth.SessionToken,
 			nil, &assertion, "saml"); err != nil {
-			return sts.Credentials{}, "", err
+			return sts.Credentials{}, err
 		}
 	}
 
 	principal, role, err := GetRoleFromSAML(assertion.Resp, profileARN)
 	if err != nil {
-		return sts.Credentials{}, "", err
+		return sts.Credentials{}, err
 	}
 
 	// Step 4 : Assume Role with SAML
@@ -157,18 +165,25 @@ func (o *OktaSAMLClient) AuthenticateProfile(profileARN string, duration time.Du
 	if err != nil {
 		log.WithField("role", role).Errorf(
 			"error assuming role with SAML: %s", err.Error())
-		return sts.Credentials{}, "", err
+		return sts.Credentials{}, err
 	}
 
-	var sessionCookie string
-	cookies := o.CookieJar.Cookies(o.BaseURL)
-	for _, cookie := range cookies {
-		if cookie.Name == "sid" {
-			sessionCookie = cookie.Value
+	if o.Keyring != nil {
+		cookies := o.CookieJar.Cookies(o.BaseURL)
+		for _, cookie := range cookies {
+			if cookie.Name == "sid" {
+				newCookieItem := keyring.Item{
+					Key:                         SessionCookieName,
+					Data:                        []byte(cookie.Value),
+					Label:                       "okta session cookie",
+					KeychainNotTrustApplication: false,
+				}
+				o.Keyring.Set(newCookieItem)
+			}
 		}
 	}
 
-	return *samlResp.Credentials, sessionCookie, nil
+	return *samlResp.Credentials, nil
 }
 
 func selectMFADevice(factors []OktaUserAuthnFactor) (*OktaUserAuthnFactor, error) {
